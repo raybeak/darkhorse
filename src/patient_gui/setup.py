@@ -1,29 +1,30 @@
-import os
-from glob import glob
-from setuptools import setup
+from setuptools import find_packages, setup
 
-package_name = 'my_bringup'
+package_name = 'patient_gui'
 
 setup(
     name=package_name,
     version='0.0.0',
-    packages=[package_name],
+    packages=find_packages(exclude=['test']),
     data_files=[
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        # ▼ [필수] launch 폴더 등록
-        (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='user',
-    maintainer_email='user@todo.todo',
+    maintainer='flynn',
+    maintainer_email='youdongoh67@gmail.com',
     description='TODO: Package description',
     license='TODO: License declaration',
-    tests_require=['pytest'],
+    extras_require={
+        'test': [
+            'pytest',
+        ],
+    },
     entry_points={
         'console_scripts': [
+            'patient_ui = patient_gui.patient_gui_node:main',
         ],
     },
 )

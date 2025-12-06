@@ -1,0 +1,3 @@
+[console_scripts]
+doctor_ui = doctor_gui.doctor_node:main
+
