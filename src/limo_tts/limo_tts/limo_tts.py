@@ -2,6 +2,7 @@ import rclpy
 from rclpy.action import ActionServer
 from rclpy.node import Node
 from std_msgs.msg import String
+from limo_interfaces.action import Speak
 import pyttsx3
 import threading
 import queue
@@ -20,7 +21,7 @@ class TextToSpeechNode(Node):
         #엑션 서버로 변경
         self._action_server = ActionServer(
             self,
-            String,
+              String,
             'speak_text',
             self.execute_callback)
 
