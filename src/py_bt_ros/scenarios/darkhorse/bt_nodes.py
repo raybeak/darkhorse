@@ -25,86 +25,85 @@ DEPARTMENT_COORDINATES = {
 # ---------------------------------------------------------
 # 1. WaitForQR: QR(JotForm) 데이터 수신 및 경로 계획
 # ---------------------------------------------------------
-class WaitForQR(ConditionWithROSTopics):
-    """
-    JotForm 데이터(/hospital/patient_data)를 기다림.
-    데이터 포맷 예시(JSON string): {"patient_id": "123", "departments": ["내과", "영상의학과"]}
-    """
+# [중요] 상속 변경: ConditionWithROSTopics -> Node
+# 우리는 단순히 True/False 체크가 아니라, 데이터가 올 때까지 '대기(Running)' 상태를 유지해야 합니다.
+# [수정된 WaitForQR 전체 코드]
+# [수정 1] Node -> SyncAction 으로 변경 (run 함수 자동 지원)
+class WaitForQR(SyncAction):
     def __init__(self, name, agent):
-        super().__init__(name, agent, [
-            (String, "/hospital/patient_data", "patient_msg")
-        ])
-        # 시작 위치 저장을 위한 플래그
+        # [핵심 수정 1] agent 대신 self._tick을 넘겨야 에러가 안 납니다!
+        super().__init__(name, self._tick)
+        self.agent = agent
+        self.received_msg = None
+        
+        # [핵심 수정 2] agent.ros_bridge.node 경로 사용
+        self.sub = agent.ros_bridge.node.create_subscription(
+            String, 
+            "/hospital/patient_data", 
+            self._callback, 
+            10
+        )
         self.home_saved = False
 
-    def _predicate(self, agent, blackboard):
-        # 1. 현재 로봇 위치를 Home으로 저장 (한 번만 실행)
+    def _callback(self, msg):
+        self.received_msg = msg
+        print("[WaitForQR] QR 데이터 수신됨!")
+
+    def _tick(self, agent, blackboard):
+        # 1. 초기 위치 저장
         if not self.home_saved:
-            # agent.robot_pose는 로봇의 현재 위치(Pose)를 가지고 있다고 가정 (ros_bridge에서 갱신됨)
-            # 만약 없다면 별도 tf 리스너나 odom 구독이 필요하지만, 여기서는 agent가 pose를 안다고 가정
             if hasattr(agent, 'robot_pose') and agent.robot_pose is not None:
                 blackboard['home_pose'] = agent.robot_pose
                 self.home_saved = True
-            else:
-                # 로봇 위치를 아직 모르면 일단 (0,0)으로 가정하거나 대기
-                pass
+                print(f"[WaitForQR] 초기 위치 저장 완료")
 
-        # 2. 메시지 수신 확인
-        if "patient_msg" not in self._cache:
-            return False # 아직 메시지 안 옴 (RUNNING)
+        # 2. 메시지가 없으면 -> 절대 움직이지 마! (RUNNING 반환)
+        if self.received_msg is None:
+            # 여기서 RUNNING을 반환해야 트리가 다음 단계(Think/Move)로 안 넘어갑니다.
+            return Status.RUNNING
 
-        msg = self._cache["patient_msg"] # std_msgs/String
+        # 3. 메시지 처리
         try:
-            data = json.loads(msg.data)
+            data = json.loads(self.received_msg.data)
             dept_list = data.get("departments", [])
-            
-            # 방문해야 할 진료과 리스트를 큐(Queue) 형태로 블랙보드에 저장
             blackboard['department_queue'] = dept_list
             blackboard['patient_id'] = data.get("patient_id", "Unknown")
             
-            print(f"[WaitForQR] 환자({blackboard['patient_id']}) 데이터 수신. 방문 예정: {dept_list}")
+            print(f"[WaitForQR] 데이터 확인됨. 환자: {blackboard['patient_id']}")
             
-            # 처리가 끝났으므로 캐시 비우고 SUCCESS 반환
-            del self._cache["patient_msg"]
-            return True 
+            self.received_msg = None 
+            return Status.SUCCESS # 이제야 비로소 다음 단계로 이동 허가
             
         except json.JSONDecodeError:
-            print("[WaitForQR] JSON 파싱 에러")
-            return False
-
+            self.received_msg = None
+            return Status.RUNNING
 # ---------------------------------------------------------
 # 2. Think: 다음 목적지 결정 (Iterator 역할)
 # ---------------------------------------------------------
 class Think(SyncAction):
-    """
-    department_queue에서 하나를 꺼내 현재 목표(target_pose)로 설정.
-    큐가 비어있으면 FAILURE를 반환하여 루프 종료를 알림.
-    """
     def __init__(self, name, agent):
-        super().__init__(name, agent)
+        # [핵심 수정] 여기도 agent 대신 self._tick으로 변경 필수
+        super().__init__(name, self._tick)
 
     def _tick(self, agent, blackboard):
         queue = blackboard.get('department_queue', [])
         
         if len(queue) > 0:
-            # 다음 진료과 꺼내기
             next_dept = queue.pop(0)
             coords = DEPARTMENT_COORDINATES.get(next_dept)
             
             if coords:
                 blackboard['current_target_name'] = next_dept
                 blackboard['current_target_coords'] = coords
-                blackboard['department_queue'] = queue # 업데이트된 큐 저장
-                print(f"[Think] 다음 목적지 설정: {next_dept} {coords}")
+                blackboard['department_queue'] = queue
+                print(f"[Think] 다음 목적지: {next_dept}")
                 return Status.SUCCESS
             else:
-                print(f"[Think] 경고: {next_dept}의 좌표 정보가 없습니다. 스킵합니다.")
-                # 좌표가 없으면 재귀적으로 다음 것 찾거나 실패 처리 (여기서는 실패 처리)
+                print(f"[Think] 좌표 없음: {next_dept}")
                 return Status.FAILURE
         else:
             print("[Think] 모든 진료과 방문 완료.")
-            return Status.FAILURE # 큐가 비었으므로 실패 반환 -> 루프 종료 트리거
-
+            return Status.FAILURE
 # ---------------------------------------------------------
 # 3. Move: Nav2 Action을 이용한 이동
 # ---------------------------------------------------------
@@ -201,31 +200,24 @@ class ReturnHome(ActionWithROSAction):
 
 
 class KeepRunningUntilFailure(Node):
-    """
-    자식 노드를 실행하고, 자식이 FAILURE를 반환할 때까지 
-    계속 RUNNING 상태를 유지하며 반복 실행합니다.
-    """
-    # [수정된 부분] 초기화 함수(__init__) 추가
     def __init__(self, name, children=None):
         super().__init__(name)
-        # XML 파서가 넘겨준 자식 노드들을 내 리스트에 저장
         self.children = children if children is not None else []
 
-    def _tick(self, agent, blackboard):
-        # 자식이 없으면 에러(실패) 처리
+    # 중요: 비동기(async) 실행 함수로 만들어야 함
+    async def run(self, agent, blackboard):
         if not self.children:
             return Status.FAILURE
             
-        # 자식 노드 실행 (Decorator이므로 첫 번째 자식만 실행)
-        status = self.children[0]._tick(agent, blackboard)
+        # 자식 노드의 run 함수를 비동기로 기다림 (await)
+        status = await self.children[0].run(agent, blackboard)
         
-        # 자식이 실패하면 -> 나도 실패(루프 종료)
+        # 자식이 실패하면 -> 루프 종료 (나도 실패 반환)
         if status == Status.FAILURE:
             return Status.FAILURE
             
-        # 자식이 성공하거나 실행 중이면 -> 나는 계속 실행 중(RUNNING)
+        # 자식이 성공했거나 실행 중이면 -> 나는 계속 실행 중(RUNNING) -> 다시 실행됨
         return Status.RUNNING
-
 # ---------------------------------------------------------
 # 노드 등록
 # ---------------------------------------------------------
