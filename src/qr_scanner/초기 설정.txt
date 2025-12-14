@@ -1,0 +1,9 @@
+sudo apt-get update
+sudo apt-get install libzbar0  # pyzbar가 사용하는 시스템 라이브러리
+pip3 install opencv-python pyzbar
+
+
+cd ~/darkhorse
+colcon build --packages-select qr_scanner --symlink-install
+source install/setup.bash
+ros2 run qr_scanner qr_registration
