@@ -241,7 +241,7 @@ class SpeakAction(ActionWithROSAction):
        
         text_to_speak = bb.pop('speak_text', None)
         if not text_to_speak:
-            return None
+            return Status.SUCCESS  # 말할 내용이 없으면 실행 안 함
         
         goal = speakActionMsg.Goal()
         goal.text = text_to_speak
