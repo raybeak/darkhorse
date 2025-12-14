@@ -3,10 +3,11 @@
   <BehaviorTree ID="MainTree">
     <Sequence>
       <WaitForQR/>
+      <SpeakAction/>
       
       <KeepRunningUntilFailure>
         <Sequence>
-          <Think/>   <Move/>    <Doctor/>  </Sequence>
+          <Think/>   <Move/>   <SpeakAction/>   <Doctor/>  </Sequence>
       </KeepRunningUntilFailure>
       
       <ReturnHome/>

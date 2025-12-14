@@ -6,6 +6,7 @@ from modules.base_bt_nodes import (
 )
 from modules.base_bt_nodes_ros import ActionWithROSAction, ConditionWithROSTopics
 # ROS 2 Messages
+from limo_interfaces.action import Speak as speakActionMsg
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import String, Bool
 from nav2_msgs.action import NavigateToPose
@@ -218,11 +219,31 @@ class KeepRunningUntilFailure(Node):
             
         # 자식이 성공했거나 실행 중이면 -> 나는 계속 실행 중(RUNNING) -> 다시 실행됨
         return Status.RUNNING
+
+# ---------------------------------------------------------
+# 6. SpeakAction: TTS 액션 노드
+# ---------------------------------------------------------
+class SpeakAction(ActionWithROSAction):
+    """
+    Docstring for SpeakActon
+    TTS 액션 서버 노드: limo_tts/limo_tts/speak_text 사용
+    added date 2025/dec/14 by Raybeak    
+    """
+    def __init__ (self, name, agent):
+        super().__init__(name, agent, (speakActionMsg, 'speak_text'))
+
+    def _build_goal(self, agent, blackboard):
+        text_to_speak = f"{blackboard.get('current_target_name', '알 수 없음')} 에 도착 했습니다."
+        goal = SpeakAction.Goal()
+        goal.text = text_to_speak
+        print(f"[Speak] TTS 요청: {text_to_speak}")
+        return goal    
 # ---------------------------------------------------------
 # 노드 등록
 # ---------------------------------------------------------
 CUSTOM_ACTION_NODES = [
     'WaitForQR',
+    'SpeakAction',  # added 2025/dec/14
     'Think',
     'Move',
     'Doctor',
