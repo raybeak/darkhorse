@@ -291,7 +291,8 @@ class SpeakAction(ActionWithROSAction):
         goal.text = text_to_speak
         print(f"[Speak] TTS 요청: {text_to_speak}")
         return goal   
-    def _tick(self, agent, bb):
+   
+    """def _tick(self, agent, bb):
         # 1. Goal 객체 생성
         goal_msg = Speak.Goal()
         
@@ -302,8 +303,12 @@ class SpeakAction(ActionWithROSAction):
         # base_bt_nodes_ros.py가 이 goal_msg를 받도록 수정되어야 합니다.
         self.client.send_goal_async(goal_msg).add_done_callback(self._on_goal_response)
         
-        return Status.RUNNING
+        return Status.RUNNING"""
 
+
+# ---------------------------------------------------------
+# 7. MonitorSpeed: 로봇 속도 모니터링 조건 노드
+# ---------------------------------------------------------
 class MonitorSpeed(ConditionWithROSTopics):
     """
     로봇의 속도를 모니터링하는 노드
