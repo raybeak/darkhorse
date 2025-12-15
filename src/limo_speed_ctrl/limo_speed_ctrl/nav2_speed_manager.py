@@ -1,77 +1,49 @@
 import rclpy
 from rclpy.node import Node
+from std_msgs.msg import String
 from rcl_interfaces.srv import SetParameters
 from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
-from std_msgs.msg import String, Bool
 
 class Nav2SpeedManager(Node):
     def __init__(self):
         super().__init__('nav2_speed_manager')
-
-        # [설정 1] Nav2 컨트롤러 연결
-        self.cli = self.create_client(SetParameters, '/controller_server/set_parameters')
         
-        # [설정 2] Nav2가 켜져있는지 확인 (1초 대기)
-        if not self.cli.wait_for_service(timeout_sec=1.0):
-            self.get_logger().warn('Warning: Nav2 is not ready yet. Make sure to launch Nav2 first!')
-
-        # [설정 3] Foxglove UI 버튼 명령 받기
-        self.sub_ui = self.create_subscription(String, '/ui_command', self.ui_callback, 10)
+        # '/limo_speed_cmd' 토픽 구독 (KeyboardRemote와 이름 일치)
+        self.subscription = self.create_subscription(
+            String,
+            '/limo_speed_cmd',
+            self.listener_callback,
+            10)
         
-        # [설정 4] 비상정지 신호 보내기 (BT 연동용)
-        self.pub_emergency = self.create_publisher(Bool, '/emergency_stop', 10)
-
-        # 초기 속도
         self.current_max_speed = 0.5
-        
-        # ★ Limo 사용자 필독 ★
-        # Limo는 보통 'DWBLocalPlanner'를 사용합니다.
-        # 만약 작동 안 하면 'FollowPath'로 바꿔야 합니다.
-        self.plugin_name = 'DWBLocalPlanner' 
-        
-        self.get_logger().info(f"Limo Speed Manager Started. Plugin: {self.plugin_name}")
+        self.param_client = self.create_client(SetParameters, '/controller_server/set_parameters')
+        self.get_logger().info('✅ Speed Manager Ready. Waiting for +/- keys...')
 
-    def ui_callback(self, msg):
+    def listener_callback(self, msg):
         cmd = msg.data
-        if cmd == "speed_up":
-            self.change_speed(0.1)
-        elif cmd == "speed_down":
-            self.change_speed(-0.1)
-        elif cmd == "emergency":
-            self.trigger_emergency()
+        if cmd == "UP":
+            self.current_max_speed += 0.1
+        elif cmd == "DOWN":
+            self.current_max_speed -= 0.1
+        elif cmd == "STOP":
+            self.current_max_speed = 0.0
+            
+        # 속도 범위 제한 (0.0 ~ 1.0 m/s)
+        self.current_max_speed = max(0.0, min(self.current_max_speed, 1.0))
+        
+        self.apply_speed()
 
-    def change_speed(self, delta):
-        # 부동소수점 오차 제거
-        new_speed = round(self.current_max_speed + delta, 2)
-        
-        # Limo 안전 속도 범위 (0.0 ~ 0.8 m/s)
-        new_speed = max(0.0, min(new_speed, 0.8))
-        
-        self.current_max_speed = new_speed
-        
-        # Nav2에 속도 변경 요청
+    def apply_speed(self):
         req = SetParameters.Request()
         req.parameters = [
             Parameter(
-                name=f'{self.plugin_name}.max_vel_x', 
-                value=ParameterValue(type=ParameterType.PARAMETER_DOUBLE, double_value=new_speed)
+                name='FollowPath.max_vel_x', 
+                value=ParameterValue(type=ParameterType.PARAMETER_DOUBLE, double_value=self.current_max_speed)
             )
         ]
-        
-        self.cli.call_async(req)
-        self.get_logger().info(f"🚀 Speed set to: {new_speed} m/s")
-
-    def trigger_emergency(self):
-        self.get_logger().error("🚨 EMERGENCY STOP! 🚨")
-        
-        # 1. BT로 정지 신호 전송
-        msg = Bool()
-        msg.data = True
-        self.pub_emergency.publish(msg)
-        
-        # 2. 즉시 속도 0으로 설정
-        self.current_max_speed = 0.0
-        self.change_speed(0.0)
+        if self.param_client.service_is_ready():
+            self.param_client.call_async(req)
+            self.get_logger().info(f"Set Speed to: {self.current_max_speed:.1f} m/s")
 
 def main(args=None):
     rclpy.init(args=args)

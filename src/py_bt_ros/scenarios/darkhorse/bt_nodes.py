@@ -24,10 +24,37 @@ DEPARTMENT_COORDINATES = {
     "영상의학과":    {"x": 6.57, "y": 2.62, "w": 1.0},
     "내과":          {"x": 7.44, "y": 0.51, "w": 1.0},
     "정형외과":      {"x": 0.75, "y": -2.64, "w": 1.0},
-    "신경과":        {"x": 2.83, "y": 1.17, "w": 1.0}
+    "신경과":        {"x": 2.83, "y": 1.17, "w": 1.0},
+    "안내데스크":    {"x": 0.48, "y": 0.27, "w": 1.0}
 }
+
 DEFAULT_DEPARTMENTS = ["진단검사의학과", "영상의학과", "내과", "정형외과", "신경과"]
 
+#emergency 비상데스크 이동
+
+class GoToInfoDesk(ActionWithROSAction):
+    def __init__(self, name, agent):
+        super().__init__(name, agent, (NavigateToPose, '/navigate_to_pose'))
+
+    def _build_goal(self, agent, bb):
+        coords = DEPARTMENT_COORDINATES.get("안내데스크") # 좌표 가져오기
+        if not coords: return None
+
+        goal = NavigateToPose.Goal()
+        goal.pose.header.frame_id = "map"
+        goal.pose.header.stamp = self.ros.node.get_clock().now().to_msg()
+        goal.pose.pose.position.x = float(coords['x'])
+        goal.pose.pose.position.y = float(coords['y'])
+        goal.pose.pose.orientation.w = float(coords['w'])
+        
+        print(f"[GoToInfoDesk] 🚨 비상 상황! 안내데스크({coords})로 이동합니다.")
+        return goal
+
+    def _interpret_result(self, result, agent, bb, status_code=None):
+        if status_code == GoalStatus.STATUS_SUCCEEDED:
+            print("[GoToInfoDesk] 안내데스크 도착 완료.")
+            return Status.SUCCESS
+        return Status.FAILURE # <--- [수정] 이 부분이 잘려있었음. 추가 필요!
 
 # ---------------------------------------------------------
 # 1. WaitForStart: QR 데이터 수신 -> blackboard 저장 -> 다음으로 진행
@@ -99,22 +126,35 @@ class WaitForQR(SyncAction):
 # [추가] Condition Nodes: 상태 체크용 노드
 # ---------------------------------------------------------
 class IsEmergencyPressed(ConditionWithROSTopics):
+    # def __init__(self, name, agent, **kwargs):
+    #     super().__init__(name, agent, [(Bool, "/emergency_stop", "emergency_flag")], **kwargs)
+
+    # async def run(self, agent, bb):
+    #     # 메시지 없으면 "안 눌림"으로 처리 → FAILURE
+    #     if "emergency_flag" not in self._cache:
+    #         self.status = Status.FAILURE
+    #         return self.status
+
+    #     is_pressed = self._cache["emergency_flag"].data
+    #     self.status = Status.SUCCESS if is_pressed else Status.FAILURE
+    #     # 눌림은 계속 유지될 수 있으니 clear는 선택 (원하면 clear 해도 됨)
+    #     return self.status
+
+        
+    #    return False # 비상 상황 아님
     def __init__(self, name, agent, **kwargs):
-        super().__init__(name, agent, [(Bool, "/emergency_stop", "emergency_flag")], **kwargs)
+        # [수정] 토픽 이름을 '/emergency_stop' -> '/emergency_trigger'로 변경
+        super().__init__(name, agent, [(Bool, "/emergency_trigger", "emergency_flag")], **kwargs)
 
     async def run(self, agent, bb):
-        # 메시지 없으면 "안 눌림"으로 처리 → FAILURE
         if "emergency_flag" not in self._cache:
             self.status = Status.FAILURE
             return self.status
 
         is_pressed = self._cache["emergency_flag"].data
+        # 눌렸으면 SUCCESS (ReactiveFallback이 감지)
         self.status = Status.SUCCESS if is_pressed else Status.FAILURE
-        # 눌림은 계속 유지될 수 있으니 clear는 선택 (원하면 clear 해도 됨)
         return self.status
-
-        
-        return False # 비상 상황 아님
 
 class IsBatteryLow(ConditionWithROSTopics):
     """
@@ -419,6 +459,7 @@ CUSTOM_ACTION_NODES = [
     'Move',
     'WaitDoctorDone',
     'ReturnHome',
+    'GoToInfoDesk',
     'SendDiagnosisEmail',
     'SetAbort',
     'CheckAbort',

@@ -24,7 +24,11 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'nav2_speed_manager = limo_speed_ctrl.nav2_speed_manager:main'
+            # 1. 명령을 내리는 웹 리모컨
+            'web_remote = limo_speed_ctrl.web_remote:main',
+            # 2. 명령을 받아 속도를 조절하는 매니저
+            'nav2_speed_manager = limo_speed_ctrl.nav2_speed_manager:main',
+            'keyboard_remote = limo_speed_ctrl.keyboard_remote:main',
         ],
     },
 )
