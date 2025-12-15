@@ -1,111 +1,113 @@
+import sys
 import rclpy
 from rclpy.node import Node
 from rcl_interfaces.srv import SetParameters, GetParameters
 from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
 from std_msgs.msg import Bool, String
 import tkinter as tk
-from tkinter import font
-import threading
+# font 모듈 import 제거 (안전성 확보)
 
 class LimoControlUI(Node):
     def __init__(self, root):
         super().__init__('limo_control_ui')
         self.root = root
-        self.root.title("LIMO 관제 시스템 🏥")
-        self.root.geometry("450x650")
-        self.root.configure(bg="#ecf0f1")
-
-        # 1. Nav2 파라미터 클라이언트 (속도 조절용)
-        self.client_controller_set = self.create_client(SetParameters, '/controller_server/set_parameters')
-        self.client_smoother_set = self.create_client(SetParameters, '/velocity_smoother/set_parameters')
+        self.root.title("LIMO Control")
+        self.root.geometry("450x600")
+        
+        # 1. Nav2 클라이언트
+        print("[DEBUG] Creating Clients...")
+        self.client_controller = self.create_client(SetParameters, '/controller_server/set_parameters')
+        self.client_smoother = self.create_client(SetParameters, '/velocity_smoother/set_parameters')
         self.client_controller_get = self.create_client(GetParameters, '/controller_server/get_parameters')
 
-        # 2. 비상 & 상태 통신
+        # 2. 통신 설정
         self.pub_emergency = self.create_publisher(Bool, '/emergency_trigger', 10)
         self.create_subscription(String, '/hospital/nav_status', self.update_status, 10)
 
-        # 변수 초기화
-        self.current_speed = 0.4 
+        # 변수
+        self.current_speed = 0.4
         self.min_speed = 0.1
         self.max_speed = 1.0
         self.is_emergency = False
-        self.current_status_text = "시스템 대기 중..."
+        self.current_status_text = "IDLE"
 
-        # 3. Nav2와 속도 동기화
-        self.sync_initial_speed()
+        # 3. 위젯 생성
+        print("[DEBUG] Creating Widgets...")
         self.create_widgets()
+        
+        # 4. ROS Loop
+        self.root.after(100, self.ros_spin_once)
+        self.sync_initial_speed()
+
+    def ros_spin_once(self):
+        try:
+            rclpy.spin_once(self, timeout_sec=0.0)
+        except Exception:
+            pass
+        self.root.after(100, self.ros_spin_once)
 
     def sync_initial_speed(self):
-        if self.client_controller_get.wait_for_service(timeout_sec=1.0):
+        if self.client_controller_get.service_is_ready():
             req = GetParameters.Request()
             req.names = ['FollowPath.max_vel_x']
             future = self.client_controller_get.call_async(req)
             future.add_done_callback(self._sync_callback)
-        else:
-            self.get_logger().warn("Nav2 not ready. Using default speed 0.4")
 
     def _sync_callback(self, future):
         try:
             result = future.result()
             if result.values:
-                real_speed = result.values[0].double_value
-                self.current_speed = round(real_speed, 2)
-                self.root.after(0, lambda: self.lbl_speed_val.config(text=f"현재 설정: {self.current_speed:.1f} m/s"))
-                self.get_logger().info(f"🔄 Synced speed: {self.current_speed} m/s")
+                val = result.values[0].double_value
+                self.current_speed = round(val, 2)
+                self.lbl_speed.config(text=f"Speed: {self.current_speed} m/s")
         except Exception: pass
 
     def create_widgets(self):
-        # 헤더
-        header_frame = tk.Frame(self.root, bg="#2c3e50", pady=20)
-        header_frame.pack(fill="x")
-        tk.Label(header_frame, text="Current Status", bg="#2c3e50", fg="#bdc3c7").pack()
-        self.lbl_status = tk.Label(header_frame, text=self.current_status_text, 
-                                   bg="#2c3e50", fg="#f1c40f", font=("Gothic", 20, "bold"))
-        self.lbl_status.pack(pady=10)
+        # ⚠️ [안전 모드] 폰트, 색상 등 복잡한 옵션 제거
+        
+        # 상태 표시
+        frame_status = tk.Frame(self.root, pady=10)
+        frame_status.pack(fill="x")
+        tk.Label(frame_status, text="Status:").pack()
+        self.lbl_status = tk.Label(frame_status, text=self.current_status_text, font=("Arial", 16, "bold"))
+        self.lbl_status.pack()
 
-        # 속도 제어
-        control_frame = tk.LabelFrame(self.root, text="🚀 이동 속도 제어", bg="#ecf0f1", font=("Arial", 12, "bold"), padx=20, pady=20)
-        control_frame.pack(pady=20, padx=20, fill="x")
-        self.lbl_speed_val = tk.Label(control_frame, text=f"현재 설정: {self.current_speed:.1f} m/s", bg="#ecf0f1", font=("Arial", 14))
-        self.lbl_speed_val.pack(pady=(0, 15))
+        # 속도 조절
+        frame_speed = tk.LabelFrame(self.root, text="Speed Control", pady=10)
+        frame_speed.pack(fill="x", padx=10, pady=10)
+        
+        self.lbl_speed = tk.Label(frame_speed, text=f"Speed: {self.current_speed} m/s", font=("Arial", 12))
+        self.lbl_speed.pack()
 
-        btn_frame = tk.Frame(control_frame, bg="#ecf0f1")
-        btn_frame.pack()
-        tk.Button(btn_frame, text="🐢 감속 (-0.1)", command=lambda: self.change_speed(-0.1),
-                  bg="#95a5a6", fg="white", font=("Arial", 11, "bold"), height=2, width=14).pack(side="left", padx=5)
-        tk.Button(btn_frame, text="🐇 가속 (+0.1)", command=lambda: self.change_speed(0.1),
-                  bg="#3498db", fg="white", font=("Arial", 11, "bold"), height=2, width=14).pack(side="right", padx=5)
+        btn_frame = tk.Frame(frame_speed)
+        btn_frame.pack(pady=5)
+        
+        tk.Button(btn_frame, text="<< Slower", width=10, command=lambda: self.change_speed(-0.1)).pack(side="left", padx=5)
+        tk.Button(btn_frame, text="Faster >>", width=10, command=lambda: self.change_speed(0.1)).pack(side="right", padx=5)
 
         # 비상 버튼
-        emergency_frame = tk.Frame(self.root, bg="#ecf0f1")
-        emergency_frame.pack(side="bottom", fill="x", pady=30, padx=20)
-        self.btn_emergency = tk.Button(emergency_frame, text="🚨 비상 정지 (EMERGENCY)", command=self.toggle_emergency,
-                                       bg="#c0392b", fg="white", font=("Arial", 18, "bold"), height=3, relief="raised", borderwidth=5)
-        self.btn_emergency.pack(fill="x")
-        tk.Label(emergency_frame, text="※ 누르면 즉시 안내데스크로 복귀합니다.", bg="#ecf0f1", fg="#7f8c8d").pack(pady=5)
+        frame_emg = tk.Frame(self.root, pady=20)
+        frame_emg.pack(fill="both", expand=True, padx=10)
+        
+        self.btn_emergency = tk.Button(frame_emg, text="EMERGENCY STOP", bg="red", fg="white", 
+                                       font=("Arial", 14, "bold"), command=self.toggle_emergency)
+        self.btn_emergency.pack(fill="both", expand=True)
 
     def change_speed(self, delta):
-        new_speed = self.current_speed + delta
-        new_speed = max(self.min_speed, min(new_speed, self.max_speed))
-        self.current_speed = round(new_speed, 2)
-        self.lbl_speed_val.config(text=f"현재 설정: {self.current_speed:.1f} m/s")
-        
-        self._set_nav2_param('/controller_server', 'FollowPath.max_vel_x', self.current_speed)
-        self._set_nav2_param('/velocity_smoother', 'max_velocity', [self.current_speed, 0.0, 1.0])
+        self.current_speed = round(max(self.min_speed, min(self.current_speed + delta, self.max_speed)), 2)
+        self.lbl_speed.config(text=f"Speed: {self.current_speed} m/s")
+        self._set_param(self.client_controller, 'FollowPath.max_vel_x', self.current_speed)
+        self._set_param(self.client_smoother, 'max_velocity', [self.current_speed, 0.0, 1.0])
 
-    def _set_nav2_param(self, node_name, param_name, value):
-        threading.Thread(target=self._call_service_thread, args=(node_name, param_name, value), daemon=True).start()
-
-    def _call_service_thread(self, node_name, param_name, value):
-        client = self.create_client(SetParameters, f'{node_name}/set_parameters')
-        if not client.wait_for_service(timeout_sec=1.0): return
+    def _set_param(self, client, name, val):
+        if not client.service_is_ready(): return
         req = SetParameters.Request()
         p = Parameter()
-        p.name = param_name
-        if isinstance(value, list):
-            p.value = ParameterValue(type=ParameterType.PARAMETER_DOUBLE_ARRAY, double_array_value=[float(x) for x in value])
+        p.name = name
+        if isinstance(val, list):
+            p.value = ParameterValue(type=ParameterType.PARAMETER_DOUBLE_ARRAY, double_array_value=[float(x) for x in val])
         else:
-            p.value = ParameterValue(type=ParameterType.PARAMETER_DOUBLE, double_value=float(value))
+            p.value = ParameterValue(type=ParameterType.PARAMETER_DOUBLE, double_value=float(val))
         req.parameters = [p]
         client.call_async(req)
 
@@ -114,27 +116,37 @@ class LimoControlUI(Node):
         msg = Bool()
         msg.data = self.is_emergency
         self.pub_emergency.publish(msg)
+        
         if self.is_emergency:
-            self.btn_emergency.config(text="🔄 상황 종료 (초기화)", bg="#f39c12")
-            self.lbl_status.config(text="🚨 비상 복귀 중!", fg="#e74c3c")
+            self.btn_emergency.config(text="RESET (Resume)", bg="orange")
+            self.lbl_status.config(text="EMERGENCY!", fg="red")
         else:
-            self.btn_emergency.config(text="🚨 비상 정지 (EMERGENCY)", bg="#c0392b")
-            self.lbl_status.config(text="대기 중 (Idle)", fg="#f1c40f")
+            self.btn_emergency.config(text="EMERGENCY STOP", bg="red")
+            self.lbl_status.config(text="IDLE", fg="black")
 
     def update_status(self, msg):
         if not self.is_emergency:
-            self.current_status_text = msg.data
-            self.lbl_status.config(text=self.current_status_text, fg="#f1c40f")
+            self.lbl_status.config(text=msg.data, fg="black")
 
 def main():
+    print("[DEBUG] Init ROS...")
     rclpy.init()
+
+    # 🚨 Stack Smashing 방지: argv 강제 초기화
+    sys.argv = [sys.argv[0]]
+
+    print("[DEBUG] Init GUI...")
     root = tk.Tk()
     app = LimoControlUI(root)
-    ros_thread = threading.Thread(target=rclpy.spin, args=(app,), daemon=True)
-    ros_thread.start()
-    root.mainloop()
-    app.destroy_node()
-    rclpy.shutdown()
+    
+    print("[DEBUG] Start Loop...")
+    try:
+        root.mainloop()
+    except KeyboardInterrupt: pass
+    finally:
+        if rclpy.ok():
+            app.destroy_node()
+            rclpy.shutdown()
 
 if __name__ == '__main__':
     main()
