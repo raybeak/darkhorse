@@ -6,6 +6,7 @@ from modules.base_bt_nodes import (
     Sequence, Fallback, ReactiveSequence, ReactiveFallback, Parallel,
 )
 from modules.base_bt_nodes_ros import ActionWithROSAction, ConditionWithROSTopics
+
 from limo_interfaces.action import Speak as speakActionMsg
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import String, Bool
@@ -32,7 +33,9 @@ def publish_ui_status(ros_node, text):
     pub.publish(msg)
 
 class GoToInfoDesk(ActionWithROSAction):
-    def __init__(self, name, agent): super().__init__(name, agent, (NavigateToPose, '/navigate_to_pose'))
+    def __init__(self, name, agent):
+        super().__init__(name, agent, (NavigateToPose, '/navigate_to_pose'))
+    
     def _build_goal(self, agent, bb):
         coords = DEPARTMENT_COORDINATES.get(INFO_DESK_NAME)
         if not coords: return None
@@ -44,6 +47,7 @@ class GoToInfoDesk(ActionWithROSAction):
         goal.pose.pose.orientation.w = float(coords['w'])
         publish_ui_status(self.ros.node, "안내데스크 복귀 중 🏠")
         return goal
+
     def _interpret_result(self, result, agent, bb, status_code=None):
         if status_code == GoalStatus.STATUS_SUCCEEDED:
             publish_ui_status(self.ros.node, "안내데스크 도착 완료")
@@ -59,7 +63,9 @@ class WaitForQR(SyncAction):
         self.sub = agent.ros_bridge.node.create_subscription(String, "/hospital/qr_login", self._callback, 10)
         self.home_saved = False
         self.first_run = True
+
     def _callback(self, msg): self.received_msg = msg
+
     def _tick(self, agent, bb):
         if self.first_run:
             publish_ui_status(agent.ros_bridge.node, "환자 접수 대기 중... 📋")
@@ -177,15 +183,6 @@ class ReturnHome(ActionWithROSAction):
         goal.pose.pose.orientation.w = float(coords.get('w', 1.0))
         return goal
 
-class KeepRunningUntilFailure(Node):
-    def __init__(self, name, children=None): super().__init__(name)
-    self.children = children if children is not None else []
-    async def run(self, agent, bb):
-        if not self.children: return Status.FAILURE
-        status = await self.children[0].run(agent, bb)
-        if status == Status.FAILURE: return Status.FAILURE
-        return Status.RUNNING
-
 class SpeakAction(ActionWithROSAction):
     def __init__(self, name, agent): super().__init__(name, agent, (speakActionMsg, 'speak_text'))
     def _build_goal(self, agent, bb):
@@ -252,8 +249,25 @@ class ControlSiren(SyncAction):
         if self.enable_siren: publish_ui_status(self.ros.node, "🚨 비상 복귀 중!")
         return Status.SUCCESS
 
+# ✅ [수정됨] 들여쓰기 오류 수정 완료
+class KeepRunningUntilFailure(Node):
+    def __init__(self, name, children=None):
+        super().__init__(name)
+        # 이 줄이 __init__ 안에 확실히 들어와야 합니다!
+        self.children = children if children is not None else []
+
+    async def run(self, agent, bb):
+        if not self.children: return Status.FAILURE
+        status = await self.children[0].run(agent, bb)
+        if status == Status.FAILURE: return Status.FAILURE
+        return Status.RUNNING
+
+# ✅ [수정됨] ForceSuccess는 생성자에서 children을 부모에게 넘겨줍니다
 class ForceSuccess(Node):
-    def __init__(self, name, children=None): super().__init__(name, children)
+    def __init__(self, name, children=None):
+        super().__init__(name)  # <--- 여기 수정됨 (children 제거)
+        self.children = children if children is not None else [] # <--- 여기서 수동으로 설정
+
     async def run(self, agent, bb):
         if not self.children: return Status.SUCCESS
         status = await self.children[0].run(agent, bb)
