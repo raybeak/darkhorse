@@ -1,0 +1,3 @@
+[console_scripts]
+limo_tts = limo_tts.limo_tts:main
+
