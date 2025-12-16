@@ -1,2 +1,0 @@
-[console_scripts]
-configure = hospital_setup.setup_node:main

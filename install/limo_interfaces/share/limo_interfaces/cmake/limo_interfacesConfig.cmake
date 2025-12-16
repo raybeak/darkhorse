@@ -1,1 +1,0 @@
-/home/wego/wego_ws/src/darkhorse/build/limo_interfaces/ament_cmake_core/limo_interfacesConfig.cmake

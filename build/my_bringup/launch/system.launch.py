@@ -1,1 +1,0 @@
-/home/wego/wego_ws/src/darkhorse/src/my_bringup/launch/system.launch.py
