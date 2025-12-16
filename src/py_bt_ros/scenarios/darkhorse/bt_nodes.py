@@ -37,6 +37,10 @@ def publish_ui_status(ros_node, text):
 # ==========================================
 # Action Nodes
 # ==========================================
+from std_msgs.msg import Bool
+from nav2_msgs.action import NavigateToPose
+from action_msgs.msg import GoalStatus
+
 class GoToInfoDesk(ActionWithROSAction):
     def __init__(self, name, agent):
         super().__init__(name, agent, (NavigateToPose, '/navigate_to_pose'))
@@ -44,9 +48,26 @@ class GoToInfoDesk(ActionWithROSAction):
         self.start_time = None
         self.nav_goal_sent = False
 
+        # ✅ /cmd_siren publisher (1회만 생성)
+        self._siren_pub = self.ros.node.create_publisher(Bool, "/cmd_siren", 10)
+
+    def _force_siren_off(self):
+        """✅ 어떤 상황이든 사이렌을 강제로 끄는 안전장치"""
+        try:
+            self._siren_pub.publish(Bool(data=False))
+            # 로그는 필요하면 켜
+            print("[GoToInfoDesk] 🔕 Force siren OFF (/cmd_siren False)")
+        except Exception as e:
+            print(f"[GoToInfoDesk] ❌ Failed to publish siren off: {e}")
+
     def _build_goal(self, agent, bb):
         coords = DEPARTMENT_COORDINATES.get(INFO_DESK_NAME)
-        if not coords: return None
+        if not coords:
+            return None
+
+        # ✅ GoToInfoDesk 진입 즉시 사이렌 강제 OFF
+        self._force_siren_off()
+
         goal = NavigateToPose.Goal()
         goal.pose.header.frame_id = "map"
         goal.pose.header.stamp = self.ros.node.get_clock().now().to_msg()
@@ -56,37 +77,50 @@ class GoToInfoDesk(ActionWithROSAction):
 
         publish_ui_status(self.ros.node, "안내데스크 복귀 중 🏠")
         print("[GoToInfoDesk] 🏠 안내데스크로 복귀 시작")
-        
+
         self.start_time = self.ros.node.get_clock().now()
         self.nav_goal_sent = True
         return goal
 
     async def run(self, agent, bb):
         status = await super().run(agent, bb)
+
         if status == Status.RUNNING and self.nav_goal_sent:
             now = self.ros.node.get_clock().now()
             elapsed_time = (now - self.start_time).nanoseconds / 1e9
-            
+
             if elapsed_time > self.timeout_sec:
                 print(f"[GoToInfoDesk] ⚠️ 60초 타임아웃! 강제 종료.")
+
+                # ✅ 타임아웃에서도 사이렌 강제 OFF
+                self._force_siren_off()
+
                 if self._action_client and self._goal_handle:
                     self._action_client.cancel_goal_async(self._goal_handle)
+
                 self.nav_goal_sent = False
-                return Status.SUCCESS 
+                return Status.SUCCESS
+
         return status
 
     def _interpret_result(self, result, agent, bb, status_code=None):
         self.nav_goal_sent = False
+
+        # ✅ 결과 처리 들어오면 무조건 사이렌 강제 OFF (성공/실패/중단 상관없이)
+        self._force_siren_off()
+
         if status_code == GoalStatus.STATUS_SUCCEEDED:
             print("[GoToInfoDesk] ✅ 도착 완료")
             return Status.SUCCESS
-        
+
         if bb.get('abort', False):
             print(f"[GoToInfoDesk] ⚠️ 비상 상황: 이동 실패했으나 성공 처리")
             publish_ui_status(self.ros.node, "복귀 완료 (강제)")
             return Status.SUCCESS
+
         print(f"[GoToInfoDesk] ❌ 이동 실패 (Code: {status_code})")
         return Status.FAILURE
+
 
 class WaitForQR(SyncAction):
     def __init__(self, name, agent):

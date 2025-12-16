@@ -20,9 +20,6 @@
               <ControlSiren enable="true"/>
               <SetAbort/>
               <SpeakAction/>
-              
-              <GoToInfoDesk/>
-              
               <ControlSiren enable="false"/>
             </Sequence>
 
