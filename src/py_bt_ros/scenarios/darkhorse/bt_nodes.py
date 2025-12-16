@@ -183,8 +183,6 @@ class Think(SyncAction):
 
         coords = DEPARTMENT_COORDINATES.get(next_dept)
         if not coords:
-            # 좌표 없는 과는 visited에 넣지 말고 그냥 제외만 하고 다시 Think에서 다음 tick에 고르게
-            # (원하면 여기서 바로 재선정 루프로 바꿀 수도 있음)
             tmp = [d for d in remaining if d != next_dept]
             bb['remaining_depts'] = tmp
             return Status.RUNNING
@@ -193,8 +191,7 @@ class Think(SyncAction):
         bb['current_target_name'] = next_dept
         bb['current_target_coords'] = coords
 
-        # ✅ “방문 예정/방문 완료 처리”를 언제 할지 결정해야 하는데,
-        # 가장 단순하게는 Think에서 바로 visited에 추가해도 OK (중복 방문 방지 목적)
+        # ✅ 중복 방문 방지 목적: Think에서 방문 예정으로 처리
         visited.add(next_dept)
         bb["visited_depts"] = visited
 
@@ -239,7 +236,6 @@ class WaitingBoardSub:
             self.bb["waiting_ts"] = int(data.get("ts", 0))
 
         except Exception as e:
-            # ros_node logger가 없을 수 있으니 print로 안전 처리
             print(f"[WaitingBoardSub] bad payload: {e}")
 
 
@@ -333,9 +329,16 @@ class WaitSpeedOK(SyncAction):
 class IsEmergencyPressed(ConditionWithROSTopics):
     def __init__(self, name, agent, **kwargs):
         super().__init__(name, agent, [(Bool, "/emergency_trigger", "emergency_flag")], **kwargs)
+
     async def run(self, agent, bb):
-        if bb.get('abort', False): return Status.SUCCESS
-        if "emergency_flag" not in self._cache: return Status.FAILURE
+        """
+        ✅ [최소 수정]
+        - 기존: abort=True이면 무조건 SUCCESS → 비상이 계속 유지되는 효과
+        - 수정: emergency_trigger 토픽만 판단
+        (abort 흐름 제어는 SetAbort/NotAbort가 담당)
+        """
+        if "emergency_flag" not in self._cache:
+            return Status.FAILURE
         return Status.SUCCESS if self._cache["emergency_flag"].data else Status.FAILURE
 
 class IsBatteryLow(ConditionWithROSTopics):
@@ -367,28 +370,38 @@ class SendDiagnosisEmail(SyncAction):
         self.pub.publish(msg)
         return Status.SUCCESS
 
-# ✅ [핵심 수정] 메시지 유실 방지를 위한 0.2초 대기
+# ✅ [핵심 수정] 사이렌 중복 울림 방지: 엣지 트리거 (중복 publish 금지)
 class ControlSiren(SyncAction):
     def __init__(self, name, agent, enable=True, **kwargs):
         super().__init__(name, self._tick, **kwargs)
         self.ros = agent.ros_bridge
         self.pub = self.ros.node.create_publisher(Bool, "/cmd_siren", 10)
+
         self.enable_siren = bool(enable)
         if 'enable' in kwargs:
             val = str(kwargs['enable']).lower()
             self.enable_siren = (val == 'true')
 
+        # ✅ 이 노드 인스턴스에서 마지막으로 보낸 값 저장
+        self._last_sent = None
+
     def _tick(self, agent, bb):
+        # ✅ 같은 값이면 재전송하지 않음 (ReactiveFallback tick 반복 방지)
+        if self._last_sent == self.enable_siren:
+            return Status.SUCCESS
+
         msg = Bool()
         msg.data = self.enable_siren
         self.pub.publish(msg)
-        
-        # ✅ 중요: 메시지가 네트워크로 나갈 시간을 확보
-        time.sleep(0.2) 
-        
+        self._last_sent = self.enable_siren
+
         state = "ON (10초)" if self.enable_siren else "OFF"
         publish_ui_status(self.ros.node, f"🚨 사이렌 {state}")
-        print(f"[Siren] 신호 전송 완료: {self.enable_siren}")
+        print(f"[ControlSiren] publish {self.enable_siren}")
+
+        # 메시지 유실 방지용으로 최소 대기(너무 길면 BT tick이 멈춤)
+        time.sleep(0.02)
+
         return Status.SUCCESS
 
 class ReturnHome(ActionWithROSAction): 
