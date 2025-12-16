@@ -1,6 +1,8 @@
 import math
 import json
 import random
+import rclpy
+from rclpy.node import Node
 from modules.base_bt_nodes import (
     BTNodeList, Status, SyncAction, Node,
     Sequence, Fallback, ReactiveSequence, ReactiveFallback, Parallel,
@@ -132,25 +134,50 @@ class Think(SyncAction):
     def __init__(self, name, agent):
         super().__init__(name, self._tick)
 
-    def _tick(self, agent, bb):
-        remaining = bb.get('remaining_depts', []) or []
-        if INFO_DESK_NAME in remaining: remaining = [d for d in remaining if d != INFO_DESK_NAME]
-        
-        # ✅ 갈 곳이 없으면 FAILURE 반환 (루프 종료 신호)
-        if len(remaining) == 0: return Status.FAILURE
+    def _ensure_waiting_sub(self, agent, bb):
+        # ✅ 최초 1회만 subscription 생성 (bb 참조를 여기서 잡아둠)
+        if not hasattr(agent, "_waiting_board_sub"):
+            agent._waiting_board_sub = WaitingBoardSub(agent.ros_bridge.node, bb)
+            print("[Think] ✅ WaitingBoardSub attached (/hospital/waiting_board)")
 
-        waiting_counts = {d: random.randint(self.wait_min, self.wait_max) for d in remaining}
-        min_wait = min(waiting_counts.values())
-        candidates = [d for d, w in waiting_counts.items() if w == min_wait]
-        next_dept = random.choice(candidates)
+    def _tick(self, agent, bb):
+        # ✅ 매 tick마다 호출해도, 내부에서 1회만 생성됨
+        self._ensure_waiting_sub(agent, bb)
+
+        remaining = bb.get('remaining_depts', []) or []
+        if INFO_DESK_NAME in remaining:
+            remaining = [d for d in remaining if d != INFO_DESK_NAME]
+
+        # ✅ 갈 곳이 없으면 FAILURE 반환 (루프 종료 신호)
+        if len(remaining) == 0:
+            return Status.FAILURE
+
+        dept_wait = bb.get("dept_wait", {}) or {}
+
+        # remaining 중에서 대기정보 있는 것만 후보
+        candidates = []
+        for d in remaining:
+            if d in dept_wait:
+                try:
+                    candidates.append((d, int(dept_wait[d])))
+                except:
+                    pass
+
+        # 대기정보가 아직 없으면 fallback 랜덤
+        if not candidates:
+            next_dept = random.choice(remaining)
+        else:
+            min_wait = min(w for _, w in candidates)
+            tied = [d for d, w in candidates if w == min_wait]
+            next_dept = random.choice(tied)
 
         coords = DEPARTMENT_COORDINATES.get(next_dept)
         if not coords:
-            # 좌표 없으면 남은 목록에서 제외하고 다음 tick에서 재선정
             if next_dept in remaining:
                 remaining.remove(next_dept)
             bb['remaining_depts'] = remaining
             return Status.RUNNING
+
         bb['current_target_name'] = next_dept
         bb['current_target_coords'] = coords
         if next_dept in remaining:
@@ -159,6 +186,48 @@ class Think(SyncAction):
 
         bb['speak_text'] = f"{next_dept}로 이동할게요."
         return Status.SUCCESS
+
+
+WAITING_TOPIC = "/hospital/waiting_board"
+
+class WaitingBoardSub:
+    """
+    ROS subscription을 agent.ros_bridge.node에 달아 bb에 dept_wait/dept_queue를 써주는 헬퍼.
+    (BT Node 아님 / rclpy Node 상속 안 함)
+    """
+    def __init__(self, ros_node, bb):
+        self.bb = bb
+        self.sub = ros_node.create_subscription(String, WAITING_TOPIC, self.cb, 10)
+
+    def cb(self, msg):
+        try:
+            data = json.loads(msg.data)
+
+            dept_wait = data.get("dept_wait", {}) or {}
+            dept_queue = data.get("dept_queue", {}) or {}
+
+            # 타입 정리: 값이 문자열로 와도 int로
+            cleaned_wait = {}
+            for k, v in dept_wait.items():
+                try:
+                    cleaned_wait[str(k)] = int(v)
+                except:
+                    pass
+
+            cleaned_queue = {}
+            for k, v in dept_queue.items():
+                if isinstance(v, list):
+                    cleaned_queue[str(k)] = [str(x) for x in v]
+                else:
+                    cleaned_queue[str(k)] = []
+
+            self.bb["dept_wait"] = cleaned_wait
+            self.bb["dept_queue"] = cleaned_queue
+            self.bb["waiting_ts"] = int(data.get("ts", 0))
+
+        except Exception as e:
+            # ros_node logger가 없을 수 있으니 print로 안전 처리
+            print(f"[WaitingBoardSub] bad payload: {e}")
 
 
 class Move(ActionWithROSAction):
