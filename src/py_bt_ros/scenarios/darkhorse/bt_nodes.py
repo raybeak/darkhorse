@@ -330,6 +330,7 @@ class WaitDoctorDone(SyncAction):
         # ✅ “진료 완료” 받음 → SUCCESS만 반환
         self._done = False
         self.status_sent = False
+        self._last_msg = False
         bb['speak_text'] = "진료가 끝났습니다. 다음 진료로 이동합니다."
         return Status.SUCCESS
 
